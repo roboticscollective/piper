@@ -42,13 +42,34 @@ ROS 2 Humble workspace for the Piper 6-DOF robot arm with a two-finger gripper. 
 - Xbox controller, if using joystick teleoperation
 - 3Dconnexion SpaceMouse and `spacenav_node`, if using SpaceMouse teleoperation
 
+## Repository Setup
+
+Clone the repository together with its submodules:
+
+```bash
+git clone --recurse-submodules <REPOSITORY_URL>
+cd <REPOSITORY_DIRECTORY>
+```
+
+If the repository was already cloned, initialize and update the submodules:
+
+```bash
+git submodule update --init --recursive
+```
+
 ## Docker Setup
 
 Allow the local Docker container to connect to the X server:
 
 ```bash
+# Allow local Docker processes to access the X server
 xhost +local:docker
+
+# Revoke access after finishing GUI work
+xhost -local:docker
 ```
+
+> `xhost +local:docker` is convenient for local development, but broadens X-server access. Prefer an Xauthority-cookie setup on shared workstations.
 
 Build and start the container:
 
@@ -77,6 +98,15 @@ cd /workspace
 colcon build --packages-select piper_servo
 source install/setup.bash
 ```
+
+> In every new container shell, source the ROS installation and workspace overlay before running ROS commands:
+>
+> ```bash
+> source /opt/ros/humble/setup.bash
+> source /workspace/install/setup.bash
+> ```
+>
+> If the container image sources these automatically through `.bashrc`, no manual sourcing is needed.
 
 ## CAN Bus Setup
 
@@ -161,23 +191,49 @@ Check that controllers are active:
 ros2 control list_controllers
 ```
 
-The expected arm trajectory controller is:
+The expected active arm trajectory controller is:
 
 ```text
-arm_controller
+joint_state_broadcaster  active
+arm_controller           active
 ```
 
 The controller is **not** named `joint_trajectory_controller`. A mismatch in this name can cause apparent Servo failures because Servo publishes commands to the wrong output topic.
 
-## MoveIt Servo
+## Simulation Quick Start
 
-MoveIt Servo accepts Cartesian twist commands or joint jog commands and sends generated trajectories to the active arm controller. Its real-time servoing functionality includes singularity handling, collision checks, and joint-limit enforcement.
+Open separate shells in the container, source the workspace overlay in each shell, then start the stack in this order.
 
-Launch Gazebo and Moveit first before starting the servo node.
+Terminal 1 — start Gazebo:
+
+```bash
+ros2 launch piper_gazebo piper_gazebo.launch.py
+```
+
+Terminal 2 — start the gripper-equipped MoveIt configuration:
+
+```bash
+ros2 launch piper_with_gripper_moveit piper_moveit.launch.py
+```
+
+Terminal 3 — start the custom Servo stack. It commands the configured ready pose before starting `servo_server`, RViz, and `twist_stamper`:
 
 ```bash
 ros2 launch piper_servo piper_servo.launch.py
 ```
+
+Terminal 4 — verify Servo health, then explicitly enable it:
+
+```bash
+ros2 topic echo /servo_server/status --once
+ros2 service call /servo_server/start_servo std_srvs/srv/Trigger {}
+```
+
+Start `spacenav_node` on the host, outside Docker, if using a SpaceMouse.
+
+## MoveIt Servo
+
+MoveIt Servo accepts Cartesian twist commands or joint jog commands and sends generated trajectories to the active arm controller. Its real-time servoing functionality includes singularity handling, collision checks, and joint-limit enforcement.
 
 ### Command Interfaces
 
@@ -188,7 +244,7 @@ ros2 launch piper_servo piper_servo.launch.py
 | `/servo_server/delta_joint_cmds` | `control_msgs/msg/JointJog` | Joint-space velocity command to Servo |
 | `/servo_server/status` | `moveit_msgs/msg/ServoStatus` | Servo health/status; `0` indicates healthy |
 | `/arm_controller/joint_trajectory` | `trajectory_msgs/msg/JointTrajectory` | Servo output to the arm controller |
-| `/arm_controller/follow_joint_trajectory` | Action interface | Used by MoveIt planning, not normally Servo |
+| `/arm_controller/follow_joint_trajectory` | `control_msgs/action/FollowJointTrajectory` | MoveIt planning/execution interface; Servo publishes to its configured trajectory topic |
 | `/joint_states` | `sensor_msgs/msg/JointState` | Robot feedback |
 | `/clock` | `rosgraph_msgs/msg/Clock` | Gazebo simulation clock |
 
@@ -212,7 +268,7 @@ Check status:
 ros2 topic echo /servo_server/status --once
 ```
 
-A status of `0` means Servo is operating normally. Nonzero states typically indicate a halt due to singularity, collision, stale commands, or joint-limit conditions.
+A status of `0` indicates no Servo warning or halt condition. Any nonzero value requires inspection of Servo logs and the `moveit_msgs/msg/ServoStatus` definition; common causes include singularity, collision, joint-bound, stale-command, or invalid-command conditions.
 
 ## SpaceMouse Teleoperation
 
@@ -230,7 +286,7 @@ The `piper_servo` package provides `twist_stamper`, which:
 - Uses current ROS node time and a configurable frame ID
 - Defaults to the `base_link` frame
 
-The Docker container and host must share DDS discovery correctly for the SpaceMouse topic to cross the container boundary.
+The Docker container and host must share DDS discovery correctly for the SpaceMouse topic to be discovered across the host-container boundary.
 
 ## Simulation Time
 
@@ -313,7 +369,9 @@ Do **not** use the obsolete or incorrect topic:
 /joint_trajectory_controller/joint_trajectory
 ```
 
-## Robot Joint Configuration
+## Simulation Joint Parameters
+
+> These values describe the Gazebo URDF currently used by this workspace. They are simulation parameters, not validated physical actuator limits or safety limits for the real robot.
 
 | Joint | Type | Range | Effort | Velocity | Damping |
 |---|---|---:|---:|---:|---:|
@@ -458,7 +516,7 @@ ros2 topic echo /clock
 Joint jogging bypasses the Cartesian Jacobian and is useful for isolating singularity-related failures:
 
 ```bash
-ros2 topic pub --rate 10 \
+ros2 topic pub --use-sim-time --rate 10 \
   /servo_server/delta_joint_cmds \
   control_msgs/msg/JointJog \
   "{header: {frame_id: 'base_link', stamp: now},
@@ -487,7 +545,7 @@ Check these items in order:
 
 1. Verify that `arm_controller` is active.
 2. Verify that `command_out_topic` is `/arm_controller/joint_trajectory`.
-3. Confirm `use_sim_time: true` for all relevant simulation nodes.
+3. Confirm `use_sim_time: true` for all relevant simulation nodes and use `ros2 topic pub --use-sim-time` for CLI tests.
 4. Confirm stamped commands use Gazebo time rather than wall-clock time.
 5. Start Servo explicitly using `/servo_server/start_servo`.
 6. Confirm `/servo_server/status` is `0`.
@@ -538,11 +596,16 @@ hard_stop_singularity_threshold: 20.0
 
 Do not lower singularity protections on real hardware without validating the resulting behavior and ensuring that the robot cannot enter unsafe configurations.
 
-## Recommended `twist_stamper` Filtering
+## Proposed `twist_stamper` Filtering
+
+> This is a proposed enhancement, not a confirmed implementation. Rebuild and test `piper_servo` after applying it.
 
 Add a dead zone and clamping before sending SpaceMouse data to Servo to suppress input noise:
 
 ```cpp
+#include <algorithm>
+#include <cmath>
+
 auto clamp_deadzone = [](double value, double deadzone, double max_value)
 {
   if (std::abs(value) < deadzone)
@@ -553,6 +616,8 @@ auto clamp_deadzone = [](double value, double deadzone, double max_value)
   return std::clamp(value, -max_value, max_value);
 };
 ```
+
+This implementation requires C++17 because it uses `std::clamp`. Set `CMAKE_CXX_STANDARD` to `17`, or replace `std::clamp` with an equivalent C++14-safe bound operation.
 
 Suggested initial values:
 
