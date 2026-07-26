@@ -1,0 +1,4 @@
+[submodule "ros2_ws/src/piper_ros"]
+	path = ros2_ws/src/piper_ros
+	url = https://github.com/agilexrobotics/piper_ros.git
+	branch = humble
