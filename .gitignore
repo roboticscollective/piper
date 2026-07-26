@@ -1,3 +1,26 @@
+# --- ROS 2 Build & Workspace Artifacts ---
 build/
 install/
 log/
+.build/
+
+# --- Python Artifacts ---
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.tox/
+.coverage
+htmlcov/
+
+# --- Compiled C/C++ Artifacts ---
+*.o
+*.obj
+*.so
+*.a
+*.lib
+
+# --- IDEs and Editor Configurations ---
+# VS Code
+.vscode/

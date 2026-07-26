@@ -1,0 +1,30 @@
+services:
+  piper_ros:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: piper_ros_container
+    working_dir: /workspace
+    volumes:
+      - ./ros2_ws:/workspace:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /dev:/dev
+    environment:
+          - DISPLAY=${DISPLAY:-:0}
+          - QT_X11_NO_MITSHM=1
+          - ROS_DOMAIN_ID=27
+          - RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+          - FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/fastdds_config.xml
+    network_mode: host
+    privileged: true 
+    stdin_open: true
+    tty: true
+    # Use standard bash execution while ensuring workspace is sourced properly
+    entrypoint: [ "/ros_entrypoint.sh" ]
+    command: >
+      bash -c "
+      source /opt/ros/humble/setup.bash && 
+      if [ -f /workspace/install/setup.bash ]; then source /workspace/install/setup.bash; fi &&
+      exec bash
+      "
+    restart: unless-stopped
